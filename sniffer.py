@@ -1,66 +1,75 @@
 #!/usr/bin/env python3
 
-from scapy.all import sniff, TCP, Raw, IP
+from scapy.all import sniff, TCP, Raw, IP, wrpcap
 import os
 import sys
 import netifaces
 import nmap
+import threading
+import time
+from rich.live import Live
+from rich.table import Table
 
 
-class Sniffer:
+# 🔴 Nmap Scanner
+class NmapScanner:
+    def __init__(self):
+        self.service_map = {}
+        self.running = True
 
-    def __init__(self, interface):
-        self.interface = interface
-        self.service_map = {}  # (ip, port) → service
-
-    def check_root(self):
-        if sys.platform.startswith('linux'):
-            if os.geteuid() != 0:
-                print('[+] Run as root user: sudo python3 sniffer.py <iface>')
-                sys.exit(1)
-
-    # 🔴 Nmap scan
-    def run_nmap_scan(self, target):
-        print(f"[+] Running nmap scan on {target}...")
-
+    def scan(self, target):
         nm = nmap.PortScanner()
         nm.scan(hosts=target, arguments='-sV -T4')
 
         for host in nm.all_hosts():
             for proto in nm[host].all_protocols():
-                ports = nm[host][proto].keys()
-
-                for port in ports:
+                for port in nm[host][proto].keys():
                     service = nm[host][proto][port]['name']
                     self.service_map[(host, port)] = service
 
-        print("[+] Service Map Built:")
-        for k, v in self.service_map.items():
-            print(f"   {k} → {v}")
+    def start(self, target):
+        while self.running:
+            print(f"[+] Nmap scanning {target}...")
+            self.scan(target)
+            time.sleep(600)
 
-    # 🔵 DPI fallback detection
+
+# 🔵 Packet Analyzer (DPI + Credentials)
+class PacketAnalyzer:
+    def __init__(self, service_map):
+        self.service_map = service_map
+        self.credentials = []
+        self.packet_log = []
+        self.packets = []
+
     def detect_protocol(self, payload):
-        payload_lower = payload.lower()
+        p = payload.lower()
 
         if payload.startswith(("GET", "POST", "HTTP/")):
             return "HTTP"
-
-        elif payload.startswith("USER") or payload.startswith("PASS"):
+        elif payload.startswith(("USER", "PASS")):
             return "FTP"
-
-        elif "login:" in payload_lower:
+        elif "login:" in p:
             return "TELNET"
-
         elif payload.startswith("SSH-"):
             return "SSH"
 
         return None
 
-    def process_packet(self, packet):
+    def extract_credentials(self, payload):
+        keywords = ["user", "pass", "login", "password", "authorization"]
+
+        for k in keywords:
+            if k in payload.lower():
+                return payload.strip()
+        return None
+
+    def analyze(self, packet):
         if packet.haslayer(TCP) and packet.haslayer(Raw) and packet.haslayer(IP):
 
-            payload = packet[Raw].load.decode(errors="ignore")
+            self.packets.append(packet)
 
+            payload = packet[Raw].load.decode(errors="ignore")
             src_ip = packet[IP].src
             dst_ip = packet[IP].dst
             sport = packet[TCP].sport
@@ -68,38 +77,94 @@ class Sniffer:
 
             protocol = None
 
-            # 🔴 Check Nmap service map first
             if (dst_ip, dport) in self.service_map:
                 protocol = self.service_map[(dst_ip, dport)]
-
             elif (src_ip, sport) in self.service_map:
                 protocol = self.service_map[(src_ip, sport)]
-
-            # 🔵 Fallback to DPI
-            if not protocol:
+            else:
                 protocol = self.detect_protocol(payload)
 
             if protocol:
-                print(f"[{protocol}] {src_ip}:{sport} → {dst_ip}:{dport}")
-                print(f"   {payload[:100]}\n")
+                log = f"{protocol} {src_ip}:{sport} → {dst_ip}:{dport}"
+                self.packet_log.append(log)
+
+                cred = self.extract_credentials(payload)
+                if cred:
+                    self.credentials.append(cred)
+
+
+# 🟢 Dashboard UI
+class DashboardUI:
+    def __init__(self, analyzer):
+        self.analyzer = analyzer
+        self.running = True
+
+    def build(self):
+        table = Table(title="Live Sniffer Dashboard")
+        table.add_column("Recent Traffic")
+        table.add_column("Credentials")
+
+        recent = "\n".join(self.analyzer.packet_log[-10:])
+        creds = "\n".join(self.analyzer.credentials[-10:])
+
+        table.add_row(recent, creds)
+        return table
 
     def start(self):
-        self.check_root()
+        with Live(self.build(), refresh_per_second=2) as live:
+            while self.running:
+                live.update(self.build())
+                time.sleep(1)
 
-        # 🔴 Ask for scan target
-        target = input("[+] Enter target network (e.g. 192.168.1.0/24): ")
-        self.run_nmap_scan(target)
 
-        print(f"\n[+] Sniffing on {self.interface}...\n")
+# 🟡 Packet Sniffer
+class PacketSniffer:
+    def __init__(self, interface, analyzer):
+        self.interface = interface
+        self.analyzer = analyzer
 
+    def start(self):
         sniff(
             iface=self.interface,
-            prn=self.process_packet,
+            prn=self.analyzer.analyze,
             store=False,
             filter="tcp"
         )
 
 
+# ⚫ Main App Controller
+class SnifferApp:
+    def __init__(self, interface):
+        self.interface = interface
+        self.scanner = NmapScanner()
+        self.analyzer = PacketAnalyzer(self.scanner.service_map)
+        self.ui = DashboardUI(self.analyzer)
+        self.sniffer = PacketSniffer(interface, self.analyzer)
+
+    def check_root(self):
+        if sys.platform.startswith('linux') and os.geteuid() != 0:
+            print('[+] Run as root: sudo python3 sniffer.py <iface>')
+            sys.exit(1)
+
+    def run(self):
+        self.check_root()
+
+        target = input("[+] Enter target network (e.g. 192.168.1.0/24): ")
+
+        # Threads
+        threading.Thread(target=self.scanner.start, args=(target,), daemon=True).start()
+        threading.Thread(target=self.ui.start, daemon=True).start()
+
+        print(f"[+] Sniffing on {self.interface}...\n")
+
+        try:
+            self.sniffer.start()
+        except KeyboardInterrupt:
+            print("\n[+] Stopping... Saving PCAP")
+            wrpcap("capture.pcap", self.analyzer.packets)
+
+
+# 🚀 Entry Point
 if __name__ == "__main__":
 
     if len(sys.argv) < 2:
@@ -113,5 +178,5 @@ if __name__ == "__main__":
         print("[-] Invalid interface")
         sys.exit(1)
 
-    sniffer = Sniffer(iface)
-    sniffer.start()
+    app = SnifferApp(iface)
+    app.run()
