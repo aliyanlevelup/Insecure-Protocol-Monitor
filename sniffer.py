@@ -11,7 +11,7 @@ from rich.live import Live
 from rich.table import Table
 
 
-# 🔴 Nmap Scanner
+#  Nmap Scanner for service detect
 class NmapScanner:
     def __init__(self):
         self.service_map = {}
@@ -34,7 +34,7 @@ class NmapScanner:
             time.sleep(600)
 
 
-# 🔵 Packet Analyzer (DPI + Credentials)
+# Packet Analyzer (DPI + Credentials)
 class PacketAnalyzer:
     def __init__(self, service_map):
         self.service_map = service_map
@@ -93,7 +93,7 @@ class PacketAnalyzer:
                     self.credentials.append(cred)
 
 
-# 🟢 Dashboard UI
+# Dashboard UI
 class DashboardUI:
     def __init__(self, analyzer):
         self.analyzer = analyzer
@@ -117,7 +117,7 @@ class DashboardUI:
                 time.sleep(1)
 
 
-# 🟡 Packet Sniffer
+# Packet Sniffer
 class PacketSniffer:
     def __init__(self, interface, analyzer):
         self.interface = interface
@@ -132,7 +132,7 @@ class PacketSniffer:
         )
 
 
-# ⚫ Main App Controller
+# Main App Controller
 class SnifferApp:
     def __init__(self, interface):
         self.interface = interface
@@ -164,7 +164,7 @@ class SnifferApp:
             wrpcap("capture.pcap", self.analyzer.packets)
 
 
-# 🚀 Entry Point
+# Entry Point
 if __name__ == "__main__":
 
     if len(sys.argv) < 2:
