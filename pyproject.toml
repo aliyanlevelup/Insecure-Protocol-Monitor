@@ -1,0 +1,26 @@
+[project]
+name = "internalpentest"
+version = "0.1.0"
+description = ""
+authors = [
+    {name = "None"}
+]
+readme = "README.md"
+requires-python = ">=3.12,<4.0"
+dependencies = [
+    "rich (>=15.0.0,<16.0.0)",
+    "textual (>=8.2.5,<9.0.0)"
+]
+
+[dependency-groups]
+dev = [
+    "textual-dev (>=1.8.0,<2.0.0)",
+    "pytest (>=9.0.3,<10.0.0)"
+]
+
+
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"
+
+package-mode = false
